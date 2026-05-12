@@ -80,16 +80,6 @@ services:
       - '${WEB_API_PORT:-8080}'
     networks:
       - bot_network
-    healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          'curl -f -sS --max-time 5 -H "X-API-Key: $WEB_API_DEFAULT_TOKEN" http://localhost:8080/health'
-        ]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 
 volumes:
   postgres_data:
