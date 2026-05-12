@@ -56,7 +56,4 @@ LABEL org.opencontainers.image.title="Bedolaga RemnaWave Bot" \
       org.opencontainers.image.url="https://github.com/fr1ngg/remnawave-bedolaga-telegram-bot" \
       org.opencontainers.image.vendor="fr1ngg"
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
-
 CMD ["python", "main.py"]
