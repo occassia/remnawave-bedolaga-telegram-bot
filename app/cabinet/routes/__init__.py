@@ -2,6 +2,8 @@
 
 from fastapi import APIRouter
 
+from app.cabinet.apple_iap import apple_iap_only_router, router as apple_iap_router
+
 from .account_linking import merge_router as merge_router, router as account_linking_router
 from .admin_apps import router as admin_apps_router
 from .admin_audit_log import router as admin_audit_log_router
@@ -11,14 +13,17 @@ from .admin_bulk_actions import router as admin_bulk_actions_router
 from .admin_button_styles import router as admin_button_styles_router
 from .admin_campaigns import router as admin_campaigns_router
 from .admin_channels import router as admin_channels_router
+from .admin_coupons import router as admin_coupons_router
 from .admin_email_templates import router as admin_email_templates_router
 from .admin_info_pages import router as admin_info_pages_router
 from .admin_landings import router as admin_landings_router
+from .admin_legal_pages import router as admin_legal_pages_router
 from .admin_menu_layout import router as admin_menu_layout_router
 from .admin_news import router as admin_news_router
 from .admin_news_categories import router as admin_news_categories_router
 from .admin_news_media import router as admin_news_media_router
 from .admin_news_tags import router as admin_news_tags_router
+from .admin_overpay_certificate import router as admin_overpay_certificate_router
 from .admin_partners import router as admin_partners_router
 from .admin_payment_methods import router as admin_payment_methods_router
 from .admin_payments import router as admin_payments_router
@@ -44,6 +49,7 @@ from .auth import router as auth_router
 from .balance import router as balance_router
 from .branding import router as branding_router
 from .contests import router as contests_router
+from .coupon import router as coupon_router
 from .gift import router as gift_router
 from .info import router as info_router
 from .info_pages import router as info_pages_router
@@ -57,8 +63,10 @@ from .polls import router as polls_router
 from .promo import router as promo_router
 from .promocode import router as promocode_router
 from .referral import router as referral_router
+from .site_verification import router as site_verification_router
 from .subscription import router as subscription_router
 from .subscription_modules.multi_tariff import router as multi_tariff_subscription_router
+from .support_ws import router as support_ws_router
 from .ticket_notifications import (
     admin_router as admin_ticket_notifications_router,
     router as ticket_notifications_router,
@@ -69,15 +77,13 @@ from .wheel import router as wheel_router
 from .withdrawal import router as withdrawal_router
 
 
-# Conditional imports
-try:
-    from .apple_iap import router as apple_iap_router
-except ImportError:
-    apple_iap_router = None
-
-
 # Main cabinet router
 router = APIRouter(prefix='/cabinet', tags=['Cabinet'], redirect_slashes=False)
+
+# Public (unauthenticated) endpoints used by payment-provider crawlers.
+# Final path becomes `/cabinet/public/site-verification`. Has its own
+# `/public` prefix so it's clearly separated from authenticated routes.
+router.include_router(site_verification_router)
 
 # Include all sub-routers
 router.include_router(auth_router)
@@ -90,8 +96,7 @@ router.include_router(balance_router)
 router.include_router(referral_router)
 
 # Apple IAP routes
-if apple_iap_router is not None:
-    router.include_router(apple_iap_router)
+router.include_router(apple_iap_router)
 
 router.include_router(partner_application_router)
 router.include_router(withdrawal_router)
@@ -99,6 +104,7 @@ router.include_router(withdrawal_router)
 router.include_router(ticket_notifications_router)
 router.include_router(tickets_router)
 router.include_router(promocode_router)
+router.include_router(coupon_router)
 router.include_router(contests_router)
 router.include_router(polls_router)
 router.include_router(promo_router)
@@ -130,6 +136,7 @@ router.include_router(admin_ban_system_router)
 router.include_router(admin_broadcasts_router)
 router.include_router(admin_promocodes_router)
 router.include_router(admin_promo_groups_router)
+router.include_router(admin_coupons_router)
 router.include_router(admin_campaigns_router)
 router.include_router(admin_partners_router)
 router.include_router(admin_withdrawals_router)
@@ -158,8 +165,11 @@ router.include_router(admin_news_tags_router)
 router.include_router(admin_news_media_router)
 router.include_router(admin_news_router)
 router.include_router(admin_info_pages_router)
+router.include_router(admin_legal_pages_router)
+router.include_router(admin_overpay_certificate_router)
 
 # WebSocket route
 router.include_router(websocket_router)
+router.include_router(support_ws_router)
 
 __all__ = ['router']

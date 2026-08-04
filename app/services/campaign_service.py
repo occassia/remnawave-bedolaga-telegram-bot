@@ -40,6 +40,10 @@ class CampaignBonusResult:
     tariff_id: int | None = None
     tariff_name: str | None = None
     tariff_duration_days: int | None = None
+    # True если запись в advertising_campaign_registrations была создана этим вызовом
+    # (а не вернулась как existing). Используется caller'ом, чтобы понять, нужно ли
+    # слать админу уведомление о регистрации (один раз на первую успешную).
+    is_new_registration: bool = False
 
 
 class AdvertisingCampaignService:
@@ -52,6 +56,26 @@ class AdvertisingCampaignService:
         user: User,
         campaign: AdvertisingCampaign,
     ) -> CampaignBonusResult:
+        # Пользователь мог прийти с протухшими (expired) атрибутами: любой
+        # rollback выше по флоу регистрации (реферал, промокод, phantom-merge)
+        # экспайрит инстансы даже при expire_on_commit=False, а последующий
+        # sync-доступ к user.id здесь дёргает ленивую подгрузку вне greenlet →
+        # MissingGreenlet и бонус кампании не начисляется (прод-репорт
+        # 2026-07-13, регистрация по рекламной кампании). Перечитываем
+        # атрибуты асинхронно ДО первого sync-доступа.
+        try:
+            await db.refresh(user)
+        except Exception as refresh_error:
+            # user.id здесь читаем через __dict__: атрибут может быть expired,
+            # и обычный доступ сам бы дёрнул ленивую подгрузку → повторный
+            # MissingGreenlet уже внутри обработчика.
+            logger.warning(
+                '⚠️ Не удалось освежить пользователя перед бонусом кампании',
+                user_id=user.__dict__.get('id'),
+                campaign_id=campaign.id,
+                error=refresh_error,
+            )
+
         if not campaign.is_active:
             logger.warning('⚠️ Попытка выдать бонус по неактивной кампании', campaign_id=campaign.id)
             return CampaignBonusResult(success=False)
@@ -91,6 +115,30 @@ class AdvertisingCampaignService:
             logger.info('ℹ️ Кампания не имеет бонуса на баланс', campaign_id=campaign.id)
             return CampaignBonusResult(success=False)
 
+        # Регистрируем ДО начисления баланса, чтобы при повторном /start (created=False)
+        # не накрутить бонус второй раз. UNIQUE constraint в record_campaign_registration
+        # + savepoint защищают и от concurrent race conditions.
+        _, created = await record_campaign_registration(
+            db,
+            campaign_id=campaign.id,
+            user_id=user.id,
+            bonus_type='balance',
+            balance_bonus_kopeks=amount,
+        )
+
+        if not created:
+            logger.info(
+                'ℹ️ Балансный бонус уже был начислен по этой кампании ранее, пропускаем',
+                format_user_log=_format_user_log(user),
+                campaign_id=campaign.id,
+            )
+            return CampaignBonusResult(
+                success=True,
+                bonus_type='balance',
+                balance_kopeks=amount,
+                is_new_registration=False,
+            )
+
         description = f"Бонус за регистрацию по кампании '{campaign.name}'"
         success = await add_user_balance(
             db,
@@ -100,15 +148,15 @@ class AdvertisingCampaignService:
         )
 
         if not success:
+            # Маркер регистрации остался — баланс не начислился. Это лучше, чем
+            # начислить деньги без записи в БД (откатить запись теперь нельзя).
+            logger.error(
+                '❌ Регистрация записана, но баланс не начислился',
+                format_user_log=_format_user_log(user),
+                campaign_id=campaign.id,
+                amount_kopeks=amount,
+            )
             return CampaignBonusResult(success=False)
-
-        await record_campaign_registration(
-            db,
-            campaign_id=campaign.id,
-            user_id=user.id,
-            bonus_type='balance',
-            balance_bonus_kopeks=amount,
-        )
 
         logger.info(
             '💰 Пользователю начислен бонус ₽ по кампании',
@@ -121,6 +169,7 @@ class AdvertisingCampaignService:
             success=True,
             bonus_type='balance',
             balance_kopeks=amount,
+            is_new_registration=created,
         )
 
     async def _apply_subscription_bonus(
@@ -210,7 +259,7 @@ class AdvertisingCampaignService:
                 duration_days=duration_days,
             )
 
-        await record_campaign_registration(
+        _, created = await record_campaign_registration(
             db,
             campaign_id=campaign.id,
             user_id=user.id,
@@ -225,6 +274,7 @@ class AdvertisingCampaignService:
             subscription_traffic_gb=traffic_limit or 0,
             subscription_device_limit=device_limit,
             subscription_squads=squads,
+            is_new_registration=created,
         )
 
     async def _apply_none_bonus(
@@ -234,7 +284,7 @@ class AdvertisingCampaignService:
         campaign: AdvertisingCampaign,
     ) -> CampaignBonusResult:
         """Обычная ссылка без награды - только регистрация для отслеживания."""
-        await record_campaign_registration(
+        _, created = await record_campaign_registration(
             db,
             campaign_id=campaign.id,
             user_id=user.id,
@@ -250,6 +300,7 @@ class AdvertisingCampaignService:
         return CampaignBonusResult(
             success=True,
             bonus_type='none',
+            is_new_registration=created,
         )
 
     async def _apply_tariff_bonus(
@@ -360,7 +411,7 @@ class AdvertisingCampaignService:
                 duration_days=duration_days,
             )
 
-        await record_campaign_registration(
+        _, created = await record_campaign_registration(
             db,
             campaign_id=campaign.id,
             user_id=user.id,
@@ -378,4 +429,5 @@ class AdvertisingCampaignService:
             subscription_traffic_gb=traffic_limit or 0,
             subscription_device_limit=device_limit,
             subscription_squads=squads,
+            is_new_registration=created,
         )
